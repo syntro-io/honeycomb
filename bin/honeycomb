@@ -1,0 +1,193 @@
+#! /usr/bin/env ruby
+
+require 'optparse'
+require 'ostruct'
+require 'honeycomb/ir'
+require 'honeycomb/reporters/testmine'
+require 'honeycomb/reporters/test_rail'
+require 'honeycomb/reporters/hive'
+require 'honeycomb/reporters/lion'
+require 'honeycomb/parsers/junit'
+require 'honeycomb/parsers/android_junit'
+require 'honeycomb/parsers/junitcasper'
+require 'openssl'
+
+class CLIParser
+
+  #
+  # Return a structure describing the options.
+  #
+  def self.parse(args)
+
+    # Default values
+    options = OpenStruct.new
+
+    opt_parser = OptionParser.new do |opts|
+      opts.banner = "Usage: honeycomb [options]"
+
+      opts.on("-r", "--honeycomb RES_FILE",
+              "honeycomb file to load") do |honeycomb|
+        options.honeycomb = honeycomb
+      end
+
+      opts.on("-s", "--submit REPORTER",
+              "Reporter to use to submit results") do |reporter|
+        options.reporter = reporter
+      end
+
+      opts.on("--junit junit_xml",
+              "Parse junit xml to honeycomb type") do |junit|
+        options.junit = junit
+      end
+
+      opts.on("--android_junit android_junit_output",
+              "Parse Android Junit output to honeycomb type") do |android_junit|
+        options.android_junit = android_junit
+      end
+
+      opts.on("--junitcasper junit_xml",
+              "Parse junit xml to honeycomb type") do |junitcasper|
+        options.junitcasper = junitcasper
+      end
+
+      opts.on("--cert CERT",
+              "Client certificate file") do |cert|
+        options.cert = cert
+      end
+
+      opts.on("--cacert CACERT",
+              "CA Certificate") do |cacert|
+        options.cacert = cacert
+      end
+
+      opts.on("--no-ssl-verification",
+              "Turn off ssl verification (don't do this)") do |no_ssl_verification|
+        options.ssl_verify_mode = OpenSSL::SSL::VERIFY_NONE
+      end
+
+      opts.on("--url URL",
+              "URL to submit results to") do |url|
+        options.url = url
+      end
+
+      opts.on("--job-id JOB_ID",
+              "JOB_ID to submit results against") do |job_id|
+        options.job_id = job_id
+      end
+
+      opts.on("--config-file CONFIG_FILE",
+              "Config file for the submitter") do |config_file|
+        options.config_file = config_file
+      end
+
+      opts.on("--version VERSION",
+              "VERSION of the world under test") do |version|
+        options.version = version
+      end
+
+      opts.on("--target TARGET",
+              "Target of execution (e.g. Chrome)") do |target|
+        options.target = target
+      end
+
+      opts.on_tail("-V", "--honeycomb_version", "Display the version of Honeycomb") do
+        puts Honeycomb::VERSION
+        exit
+      end
+
+      opts.on_tail("-h", "--help", "Display help") do
+        puts opts
+        exit
+      end
+
+    end
+
+    opt_parser.parse!(args)
+    options
+  end
+end
+
+options = CLIParser.parse(ARGV)
+
+if options.honeycomb
+  ir = Honeycomb::IR.load(options.honeycomb)
+  puts 'IR File loaded'
+end
+
+if options.junit
+  junit_output = Honeycomb::Parsers::Junit.new(options.junit)
+  ir = Honeycomb::IR.load(junit_output.io)
+end
+
+if options.junitcasper
+  junit_output = Honeycomb::Parsers::Junitcasper.new(options.junitcasper)
+  ir = Honeycomb::IR.load(junit_output.io)
+end
+
+if options.android_junit
+    android_junit_output = Honeycomb::Parsers::AndroidJunit.new(options.android_junit)
+    ir = Honeycomb::IR.load(android_junit_output.io)
+end
+
+raise "No results loaded" if !ir
+
+if options.reporter
+  case options.reporter
+    when 'hive'
+
+      raise "Need to provide a hive job_id" if !options.job_id
+
+      reporter = Honeycomb::Reporters::Hive.new(
+          :url => options.url,
+          :cert => options.cert,
+          :cacert => options.cacert,
+          :ssl_verify_mode => options.ssl_verify_mode
+      )
+
+      reporter.submit_results( ir, :job_id => options.job_id )
+    when 'testmine'
+
+      reporter = Honeycomb::Reporters::Testmine.new(
+          :config_file      => options.config_file,
+          :url              => options.url,
+          :cert             => options.cert,
+          :cacert           => options.cacert,
+          :version          => options.version,
+          :target           => options.target,
+          :hive_job_id      => options.job_id,
+          :ssl_verify_mode  => options.ssl_verify_mode,
+          :ir               => ir
+      )
+
+      id = reporter.submit_results(ir)
+      puts "Reported to testmine: #{id}"
+
+    when 'testrail'
+      reporter = Honeycomb::Reporters::TestRail.new(
+          :config_file => options.config_file,
+          :target      => options.target,
+          :url         => options.url,
+          :ir          => ir
+      )
+
+      output = reporter.submit_results(ir)
+      puts output
+
+    when 'lion'
+      reporter = Honeycomb::Reporters::Lion.new(
+          :config_file => options.config_file,
+          :url         => options.url,
+          :cert        => options.cert,
+          :cacert      => options.cacert,
+          :target      => options.target,
+          :ssl_verify_mode => options.ssl_verify_mode,
+          :ir          => ir
+      )
+
+      output = reporter.submit_results(ir)
+      puts output
+    else
+
+      raise "#{options.reporter} not implemented"
+  end
+end
